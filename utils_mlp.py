@@ -63,8 +63,11 @@ class CustomTripletLoss(nn.Module):
         return loss.mean()
 
 def setup_paths_and_device(base_dir_path, checkpoint_dir_name, submission_dir_name, model_file_name):
-    DEVICE = torch.device("cpu")
-    print("CPU available and used.") 
+    if torch.cuda.is_available():
+        DEVICE = torch.device("cuda")
+    else:
+        DEVICE = torch.device("cpu")
+    print(f"--- Using device: {DEVICE} ---")
     
     BASE_DIR = Path(base_dir_path)
     DATA_DIR = BASE_DIR / 'data' 
@@ -88,8 +91,7 @@ def load_and_prepare_data_mlp(
     D_text = X_train_raw.shape[1]
     D_vae = y_train_raw.shape[1]
 
-    print(f"Total samples: {N_samples}")
-    print(f"Text dimension: {D_text} | VAE dimension: {D_vae}")
+    print("Training data loaded.")
 
     X_FINAL = F.normalize(X_train_raw.to(device), p=2, dim=1)
     Y_FINAL = F.normalize(y_train_raw.to(device), p=2, dim=1)
@@ -97,11 +99,12 @@ def load_and_prepare_data_mlp(
     PADDING_SIZE = D_vae - D_text
     groups = np.argmax(label_matrix, axis=1)
 
-    print("Split 1: Creation training set (90%) and Temporary set (10%)...")
+    print("\nPreparing data...")
+    print("Split 1: Creating Training set (90%) and Temporary set (10%) set...")
     gss_train_temp = GroupShuffleSplit(n_splits=1, test_size=temp_split_ratio, random_state=seed)
     train_indices, temp_indices = next(gss_train_temp.split(X_FINAL.cpu().numpy(), y=None, groups=groups))
 
-    print("Split 2: Dividing Temporary set in Validation set (5%) and Test set (5%)...")
+    print("Split 2: Splitting Temporary set into Validation set (5%) and Test set (5%)...")
     groups_temp = groups[temp_indices]
     X_temp_dummy = np.empty((len(groups_temp), 1)) 
     gss_val_test = GroupShuffleSplit(n_splits=1, test_size=test_split_ratio_of_temp, random_state=seed)
@@ -115,7 +118,10 @@ def load_and_prepare_data_mlp(
     groups_val = groups[val_indices]
     groups_test = groups[test_indices] 
 
-    print(f"Split completed: Train ({len(train_idx)}), Val ({len(val_idx)}), Test ({len(test_indices)})")
+    print(f"Split completed:")
+    print(f"    Training set: {len(train_indices)}")
+    print(f"    Validation set: {len(val_indices)}")
+    print(f"    Test set: {len(test_indices)}")
 
     X_train_split = X_FINAL[train_idx]
     Y_train_split = Y_FINAL[train_idx]
@@ -138,9 +144,6 @@ def load_and_prepare_data_mlp(
     Y_train_P = Y_train_np      
     Y_val_P = Y_val_np
     
-    print(f"X Train Padded shape: {X_train_P.shape}")
-    print(f"X Validation Padded shape: {X_val_P.shape}")
-
     mu_x_train = X_train_P.mean(axis=0)
     mu_y_train = Y_train_P.mean(axis=0)
     X_train_P_centered = X_train_P - mu_x_train
@@ -148,7 +151,7 @@ def load_and_prepare_data_mlp(
 
     R_train, _ = orthogonal_procrustes(X_train_P_centered, Y_train_P_centered)
     bias_train = mu_y_train - (mu_x_train @ R_train)
-    print(f"R, bias, mu_x calculated on {len(X_train_P)} samples.")
+    print(f"R, bias, mu_x calculated.")
 
     X_train_P_tensor = torch.from_numpy(X_train_P).float().to(device)
     Y_train_P_tensor = torch.from_numpy(Y_train_P).float().to(device) 
@@ -179,6 +182,7 @@ def load_submission_test_data(test_data_path):
     test_data = load_data(test_data_path)
     X_test_np = test_data['captions/embeddings'] 
     test_data_ids = test_data['captions/ids']
+    print("Test data loaded.")
     return X_test_np, test_data_ids
 
 def setup_model_and_optimizer_mlp(
@@ -344,8 +348,8 @@ def run_training_loop(model, train_loader, optimizer, scheduler, triplet_loss, N
             print(f"Early stopping triggered at epoch {epoch+1}. MRR does not improve after {PATIENCE} epochs.")
             break
         
-    print(f"\nFINAL TRAINING COMPLETED.")
-    print(f"Best model saved in: {FINAL_MODEL_PATH} with MRR Val: {best_val_mrr:.6f}")
+    print(f"\nTraining completed.")
+    print(f"Best model saved  with MRR Val: {best_val_mrr:.6f}")
 
 def save_validation_embeddings(model, X_val_tensor, groups_val, submission_dir):
     with torch.no_grad():
@@ -359,7 +363,6 @@ def save_validation_embeddings(model, X_val_tensor, groups_val, submission_dir):
     )
 
 def run_internal_test(model, X_test_P_tensor, Y_test_split_np, groups_test, device):
-    print(f"Evaluation of performance on TEST SET (5%)...")
     with torch.no_grad():
         test_internal_embeddings = model(X_test_P_tensor).cpu().numpy() 
 
@@ -369,7 +372,7 @@ def run_internal_test(model, X_test_P_tensor, Y_test_split_np, groups_test, devi
         Y_gallery_unique_ALL=Y_test_split_np,    
         groups_gallery_unique_ALL=groups_test    
     )
-    print(f"RESULT ON TEST (5%): MRR @ 1+99 = {test_mrr:.6f}")
+    print(f"MRR on Internal Test Set: {test_mrr:.6f}")
 
 def generate_dml_submission(model, FINAL_MODEL_PATH, X_test_np, test_data_ids, PADDING_SIZE, BASE_DIR, submission_suffix="mlp", DEVICE=torch.device("cpu")):
     print(f"\nGenerating Submission ({submission_suffix})...")
@@ -393,12 +396,12 @@ def generate_dml_submission(model, FINAL_MODEL_PATH, X_test_np, test_data_ids, P
             embeddings=Y_pred_dml_np, 
             ids=test_data_ids
         ) 
-        print(f"Embedding for ensembles saved in {submission_mlp_path}")
+        print(f"Embedding for ensembles saved.")
     except Exception as e:
         print(f"WARNING: Error saving .npz file for ensemble: {e}")
 
     submission_path_dml = SUBMISSION_DIR / f'submission_{submission_suffix}.csv'
     generate_submission(test_data_ids, Y_pred_dml_np, str(submission_path_dml))
     
-    print(f"DML submission saved in: {submission_path_dml}")
+    print(f"DML submission saved.")
 
