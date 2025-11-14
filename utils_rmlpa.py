@@ -87,26 +87,23 @@ def setup_environment(seed, device_str="cuda"):
     return device
 
 def load_and_prepare_data(train_data_path, submission_dir, device):
-    print("Loading Training Data (with prepare_train_data)...")
+    print("Loading Training Data...")
     train_data_dict = load_data(train_data_path)
     z_text_raw, z_img_raw, label_matrix = prepare_train_data(train_data_dict)
 
-    print(f"Total samples: {len(z_text_raw)}")
-    print(f"Text Dimension: {z_text_raw.shape[1]} | Image Dimension: {z_img_raw.shape[1]}")
-
     X_FINAL = z_text_raw.float().to(device) 
     Y_FINAL = z_img_raw.float().to(device) 
-    print("Data moved to device.")
+    print("Training data loaded.")
 
     groups = np.argmax(label_matrix, axis=1)
 
-    print("\nCreating Unique Global Gallery...")
+    print("Creating Unique Global Gallery...")
     Y_FINAL_np = normalize_l2(Y_FINAL).cpu().numpy()
     all_unique_group_ids, all_unique_indices = np.unique(groups, return_index=True)
 
     Y_gallery_unique_ALL = Y_FINAL_np[all_unique_indices] 
     groups_gallery_unique_ALL = all_unique_group_ids
-    print(f"Global Gallery created with {len(Y_gallery_unique_ALL)} unique images.")
+    print(f"Global Gallery created.")
 
     gallery_npz_path = Path(submission_dir) / "gallery_data.npz"
     np.savez(
@@ -114,16 +111,17 @@ def load_and_prepare_data(train_data_path, submission_dir, device):
         embeddings=Y_gallery_unique_ALL, 
         groups=groups_gallery_unique_ALL
     )
-    print(f"Gallery saved for tuning in: {gallery_npz_path}")
+    print(f"Gallery saved for tuning.")
     
     return X_FINAL, Y_FINAL, groups, Y_gallery_unique_ALL, groups_gallery_unique_ALL
 
 def create_train_val_test_splits(X_FINAL, groups, temp_split_ratio, test_split_ratio_of_temp, seed):
-    print("Split 1: Creating Train (90%) and Temp (10%) set...")
+    print("\nPreparing data...")
+    print("Split 1: Creating Training set (90%) and Temporary set (10%) set...")
     gss_train_temp = GroupShuffleSplit(n_splits=1, test_size=temp_split_ratio, random_state=seed)
     train_indices, temp_indices = next(gss_train_temp.split(X_FINAL.cpu().numpy(), y=None, groups=groups))
 
-    print("Split 2: Splitting Temp set into Validation (5%) and Test (5%)...")
+    print("Split 2: Splitting Temporary set into Validation set (5%) and Test set (5%)...")
     groups_temp = groups[temp_indices]
     X_temp_dummy = np.empty((len(groups_temp), 1)) 
     gss_val_test = GroupShuffleSplit(n_splits=1, test_size=test_split_ratio_of_temp, random_state=seed)
@@ -134,8 +132,10 @@ def create_train_val_test_splits(X_FINAL, groups, temp_split_ratio, test_split_r
     groups_val = groups[val_indices] 
     groups_test = groups[test_indices]
     
-    print(f"Split completed: Train ({len(train_indices)}), Val ({len(val_indices)}), Test ({len(test_indices)})")
-    
+    print(f"Split completed:")
+    print(f"    Training set: {len(train_indices)}")
+    print(f"    Validation set: {len(val_indices)}")
+    print(f"    Test set: {len(test_indices)}")
     return train_indices, val_indices, test_indices, groups_val, groups_test
 
 def create_dataloaders(X_FINAL, Y_FINAL, train_indices, val_indices, test_indices, batch_size, num_workers):
@@ -156,7 +156,7 @@ def create_dataloaders(X_FINAL, Y_FINAL, train_indices, val_indices, test_indice
         test_dataset, batch_size=batch_size * 2, shuffle=False,
         num_workers=num_workers, pin_memory=False
     )
-    print("DataLoaders (train, val, test) ready.")
+    print("DataLoaders created and ready.")
     return train_loader, val_loader, test_loader
 
 def setup_model_and_optimizer(
@@ -183,7 +183,7 @@ def setup_model_and_optimizer(
         T_max=num_epochs * train_loader_len, 
         eta_min=1e-6
     )
-    print(" Setup complete. Ready for training.")
+    print("Setup complete. \nReady for training.")
     return adapter, temperature, optimizer, scheduler
 
 def calculate_mrr_validation_sampled(
@@ -313,10 +313,10 @@ def train_loop(
             print(f"  -> MRR did not improve ({epochs_no_improve}/{patience})")
 
         if epochs_no_improve >= patience:
-            print(f"--- Early Stopping: MRR has not improved for {patience} epochs. ---")
+            print(f"Early Stopping: MRR has not improved for {patience} epochs.")
             break
 
-    print(f"Training completed. Best MRR: {best_mrr:.4f} ---")
+    print(f"Training completed. Best MRR: {best_mrr:.4f}")
     return best_mrr
 
 def run_verification(
@@ -324,7 +324,7 @@ def run_verification(
     groups_test, groups_val, Y_gallery_unique_ALL, groups_gallery_unique_ALL,
     submission_dir
 ):
-    print("\n--- Starting Verification on Internal Test Set ---")
+    print("\nStarting Verification on Internal Test Set...")
 
     if not Path(checkpoint_path).exists():
         print("Error: Checkpoint not found. Cannot verify.")
@@ -347,9 +347,9 @@ def run_verification(
         Y_gallery_unique_ALL=Y_gallery_unique_ALL,
         groups_gallery_unique_ALL=groups_gallery_unique_ALL
     )
-    print(f"--- MRR on Internal Test Set: {test_mrr:.4f} ---")
+    print(f"MRR on Internal Test Set: {test_mrr:.4f}")
 
-    print(f"\nGenerating VALIDATION embeddings for alpha tuning...")
+    print(f"\nGenerating validation embeddings for alpha tuning...")
     
     val_embeddings = run_inference(val_loader, adapter, device)
     val_embeddings_clean = np.nan_to_num(val_embeddings, nan=0.0, posinf=1e6, neginf=-1e6)
@@ -360,7 +360,7 @@ def run_verification(
         embeddings=val_embeddings_clean, 
         groups=groups_val 
     )
-    print(f"Validation embeddings saved to: {val_npz_path}")
+    print(f"Validation embeddings generated.")
 
 @torch.no_grad()
 def run_submission_inference(z_text_tensor, adapter, device, batch_size=512):
@@ -383,7 +383,7 @@ def generate_submission_files(
     adapter, checkpoint_path, test_data_path, 
     submission_dir, device, batch_size
 ):
-    print("\n--- Starting Submission File Generation ---")
+    print("\nStarting Submission File Generation...")
     
     if not Path(checkpoint_path).exists():
         print("Error: Checkpoint not found. Cannot generate submission.")
@@ -391,22 +391,23 @@ def generate_submission_files(
 
     if not next(adapter.parameters()).is_cuda: 
         try:
-            print(f"Loading model from {checkpoint_path} for submission...")
+            print(f"Loading model...")
             checkpoint = torch.load(checkpoint_path, map_location=device)
         except:
              checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         adapter.load_state_dict(checkpoint['adapter_state_dict'])
 
-    print(f"Loading test data from {test_data_path}...")
+    print("Model loaded.")
+    print(f"Loading test data...")
     test_data_clean = load_data(test_data_path)
 
     z_text_test_raw = test_data_clean['captions/embeddings'] 
     sample_ids = test_data_clean['captions/ids']
     
     z_text_test_tensor = torch.from_numpy(z_text_test_raw).float()
-    print(f"Test data loaded: {z_text_test_tensor.shape}")
+    print(f"Test data loaded.")
     
-    print("Running inference on submission data (test.clean.npz)...")
+    print("Running inference on submission data...")
     translated_embeddings = run_submission_inference(
         z_text_test_tensor, 
         adapter,
@@ -422,10 +423,10 @@ def generate_submission_files(
         embeddings=translated_embeddings_clean, 
         ids=sample_ids
     )
-    print(f"Submission embeddings for ensemble saved to: {submission_npz_path}")
+    print(f"Submission embeddings for ensemble saved.")
 
     submission_path = Path(submission_dir) / "submission_rmlpa.csv" 
-    print(f"Calculating similarity and saving submission to {submission_path}...")
+    print(f"Calculating similarity and saving submission...")
     
     generate_submission(
         sample_ids,                     
@@ -433,4 +434,4 @@ def generate_submission_files(
         output_file=str(submission_path)  
     )
 
-    print("    Submission created successfully!")
+    print("Submission created successfully!")
