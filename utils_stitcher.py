@@ -12,9 +12,18 @@ from sklearn.model_selection import GroupShuffleSplit
 from challenge.src.common.utils import generate_submission, load_data, prepare_train_data
 
 class Stitcher(nn.Module):
+    """
+    The "Stitcher" model maps text embeddings (input_dim) to the
+    image embedding space (output_dim) using a parallel architecture.
+    It combines a simple linear transformation with a non-linear MLP path,
+    acting as a form of residual block.
+    """
     def __init__(self, input_dim=1024, output_dim=1536, hidden_dim=2048, dropout_p=0.5):
         super().__init__()
+        # A direct linear projection
         self.linear_map = nn.Linear(input_dim, output_dim, bias=False)
+
+        # A non-linear mapping via a deep MLP
         self.mlp_map = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -25,11 +34,13 @@ class Stitcher(nn.Module):
             nn.Linear(hidden_dim, output_dim)
         )
     def forward(self, x):
+        # Combine the linear and non-linear paths
         prediction = self.linear_map(x) + self.mlp_map(x)
+
+        # Normalize the final output for cosine similarity-based loss
         return F.normalize(prediction, p=2, dim=1)
 
-def train_model_stitcher(model, train_loader, val_loader, DEVICE, EPOCHS, LR, MARGIN, MODEL_PATH, PATIENCE,
-                         groups_val, Y_gallery_unique_ALL, groups_gallery_unique_ALL):
+def train_model_stitcher(model, train_loader, val_loader, DEVICE, EPOCHS, LR, MARGIN, MODEL_PATH, PATIENCE, groups_val, Y_gallery_unique_ALL, groups_gallery_unique_ALL):
     model.to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-5) 
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
@@ -53,15 +64,23 @@ def train_model_stitcher(model, train_loader, val_loader, DEVICE, EPOCHS, LR, MA
             batch_X_norm = batch_X_norm.to(DEVICE)
             batch_Y_norm = batch_Y_norm.to(DEVICE)
 
-            anchor = model(batch_X_norm) 
-            positive = batch_Y_norm
+            anchor = model(batch_X_norm) # anchor: Mapped text embedding 
+            positive = batch_Y_norm # positive: Ground truth image embedding
+
+            # Calculate all-to-all similarity
             sim_matrix = torch.matmul(anchor, positive.T)
             positive_sim = torch.diag(sim_matrix)
             
+            # Clone the matrix
             sim_matrix_clone = sim_matrix.clone()
+
+            # Mask out the diagonal similarities
             sim_matrix_clone.fill_diagonal_(float('-inf'))
+
+            # Find the max similarity for each anchor to all negatives
             hard_negative_sim = torch.max(sim_matrix_clone, dim=1).values
 
+            # Triplet Loss
             loss_components = MARGIN - positive_sim + hard_negative_sim
             loss_components = torch.clamp(loss_components, min=0.0)
             loss = loss_components.mean()
@@ -114,12 +133,16 @@ def train_model_stitcher(model, train_loader, val_loader, DEVICE, EPOCHS, LR, MA
 
 @torch.no_grad()
 def run_submission_inference_stitcher(model, test_embds_np, DEVICE, BATCH_SIZE_TEST=1024):
+    """Runs inference on the final test data with manual batching."""
     model.eval()
+
+    # Ensure input embeddings are L2 normalized, as expected by the model
     test_embds_norm_np = normalize(test_embds_np, norm='l2', axis=1)
     test_embds_norm = torch.tensor(test_embds_norm_np, dtype=torch.float32)
 
     pred_embds_list = []
 
+    # Manual batching loop
     for i in tqdm(range(0, len(test_embds_norm), BATCH_SIZE_TEST), desc="[Submission] Stitcher execution"):
         batch_X_norm = test_embds_norm[i:i+BATCH_SIZE_TEST].to(DEVICE)
         batch_final = model(batch_X_norm)
@@ -130,6 +153,7 @@ def run_submission_inference_stitcher(model, test_embds_np, DEVICE, BATCH_SIZE_T
 
 @torch.no_grad()
 def run_validation_inference_stitcher(model, val_loader, DEVICE):
+    """Helper function to run inference on a validation dataloader."""
     model.eval()
     all_translated_embeddings = []
     
@@ -141,19 +165,18 @@ def run_validation_inference_stitcher(model, val_loader, DEVICE):
         
     return torch.cat(all_translated_embeddings, dim=0).numpy()
 
-def calculate_mrr_validation_sampled(
-    X_queries_proj, 
-    groups_val, 
-    Y_gallery_unique_ALL, 
-    groups_gallery_unique_ALL,
-    n_samples=99 
-):
+def calculate_mrr_validation_sampled(X_queries_proj, groups_val, Y_gallery_unique_ALL, groups_gallery_unique_ALL, n_samples=99):
+    """
+    Calculates Mean Reciprocal Rank (MRR) using a sampled gallery
+    (1 positive + 99 random negatives) for efficiency.
+    """
     if X_queries_proj.shape[0] == 0:
         return 0.0
 
     N_queries = X_queries_proj.shape[0]
     N_gallery = Y_gallery_unique_ALL.shape[0]
 
+    # Pre-normalize all vectors for efficient dot product
     Y_gallery_unique_ALL_norm = normalize(Y_gallery_unique_ALL, axis=1)
     X_queries_proj_norm = normalize(X_queries_proj, axis=1)
 
@@ -166,11 +189,14 @@ def calculate_mrr_validation_sampled(
         query_vec = X_queries_proj_norm[i:i+1] 
         true_query_group_id = groups_val[i]
         
+        # Find the index of the one correct gallery item
         correct_gallery_index = np.where(groups_gallery_unique_ALL == true_query_group_id)[0][0]
         
+        # Create a pool of all negative indices
         is_negative = (all_gallery_indices != correct_gallery_index)
         negative_indices_pool = all_gallery_indices[is_negative]
         
+        # Randomly sample 'n_samples' (99) from the negative pool
         sampled_negative_indices = np.random.choice(
             negative_indices_pool, 
             n_samples, 
@@ -183,9 +209,13 @@ def calculate_mrr_validation_sampled(
         
         candidate_gallery_vecs = Y_gallery_unique_ALL_norm[candidate_indices] 
         
+        # Calculate similarity scores
         similarity_scores = np.dot(query_vec, candidate_gallery_vecs.T)[0]
         
+        # Get the rank of the correct item
         ranked_indices = np.argsort(similarity_scores)[::-1]
+
+        # Find where our correct item (at index 0) ended up in the ranks
         rank_zero_based = np.where(ranked_indices == 0)[0][0]
         
         mrr_sum += 1.0 / (rank_zero_based + 1)
@@ -193,6 +223,7 @@ def calculate_mrr_validation_sampled(
     return mrr_sum / N_queries
 
 def setup_environment_stitcher(seed, device_str="cuda"):
+    """Sets random seeds for reproducibility and selects device."""
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available() and device_str == "cuda":
@@ -216,17 +247,25 @@ def load_and_prepare_data_stitcher(train_data_path, device):
     return X_FINAL, Y_FINAL, groups
 
 def create_splits_stitcher(X_FINAL, groups, temp_split_ratio, test_split_ratio_of_temp, seed):
+    """
+    Performs a 2-stage grouped split to create train, validation, and test sets.
+    This ensures that samples from the same group do not
+    appear in different splits, preventing data leakage.
+    """
     print("\nPreparing data...")
+    # Split 1: 100% -> 90% Train vs 10% Temp
     print("Split 1: Creating Training set (90%) and Temporary set (10%) set...")
     gss_train_temp = GroupShuffleSplit(n_splits=1, test_size=temp_split_ratio, random_state=seed)
     train_indices, temp_indices = next(gss_train_temp.split(X_FINAL.cpu().numpy(), y=None, groups=groups))
 
+    # Split 2: 10% Temp -> 5% Validation vs 5% Test
     print("Split 2: Splitting Temporary set into Validation set (5%) and Test set (5%)...")
     groups_temp = groups[temp_indices]
     X_temp_dummy = np.empty((len(groups_temp), 1)) 
     gss_val_test = GroupShuffleSplit(n_splits=1, test_size=test_split_ratio_of_temp, random_state=seed)
     val_indices_rel, test_indices_rel = next(gss_val_test.split(X_temp_dummy, y=None, groups=groups_temp))
 
+    # Convert relative indices back to absolute indices
     val_indices = temp_indices[val_indices_rel]
     test_indices = temp_indices[test_indices_rel]
     groups_val = groups[val_indices] 
@@ -239,6 +278,9 @@ def create_splits_stitcher(X_FINAL, groups, temp_split_ratio, test_split_ratio_o
     return train_indices, val_indices, test_indices, groups_val, groups_test
 
 def load_global_gallery(submission_dir, gallery_file="gallery_data.npz"):
+    """
+    Loads the pre-computed global gallery .npz file.
+    """
     gallery_npz_path = Path(submission_dir) / gallery_file
     if not gallery_npz_path.exists():
         print(f"ERROR: Global gallery '{gallery_file}' not found.")
@@ -250,18 +292,17 @@ def load_global_gallery(submission_dir, gallery_file="gallery_data.npz"):
     print(f"Global gallery loaded.")
     return Y_gallery_unique_ALL, groups_gallery_unique_ALL
 
-def create_dataloaders_stitcher(
-    X_FINAL, Y_FINAL, train_indices, val_indices, groups, 
-    batch_size, num_workers
-):
+def create_dataloaders_stitcher(X_FINAL, Y_FINAL, train_indices, val_indices, groups, batch_size, num_workers):
     print("Creating Datasets and DataLoaders...")
     
+    # Training Loader
     train_dataset = TensorDataset(X_FINAL[train_indices], Y_FINAL[train_indices])
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True, 
         num_workers=num_workers, pin_memory=False, drop_last=True
     )
 
+    # Validation Loader
     groups_val = groups[val_indices]
     groups_val_unique, val_unique_indices_relative = np.unique(groups_val, return_index=True)
     
@@ -277,6 +318,7 @@ def create_dataloaders_stitcher(
         num_workers=num_workers, pin_memory=False
     )
     
+    # Validation Loader
     val_dataset_inf = TensorDataset(X_FINAL[val_indices], Y_FINAL[val_indices])
     val_loader_inf = DataLoader(
         val_dataset_inf, batch_size=batch_size * 2, shuffle=False,
@@ -287,6 +329,7 @@ def create_dataloaders_stitcher(
     return train_loader, val_loader_train, val_loader_inf
 
 def setup_model_stitcher(input_dim, output_dim, hidden_dim, dropout_p, device):
+    """Initializes the Stitcher model and moves it to the device."""
     print("Initializing model...")
     model = Stitcher(
         input_dim=input_dim, 
@@ -297,11 +340,12 @@ def setup_model_stitcher(input_dim, output_dim, hidden_dim, dropout_p, device):
     print(f"    Stitcher parameters: {sum(p.numel() for p in model.parameters()):,}")
     return model
 
-def run_verification_stitcher(
-    model, checkpoint_path, val_loader_inf, X_test_tensor,
-    groups_test, groups_val, Y_gallery_unique_ALL, groups_gallery_unique_ALL,
-    submission_dir, device
-):
+def run_verification_stitcher(model, checkpoint_path, val_loader_inf, X_test_tensor, groups_test, groups_val, Y_gallery_unique_ALL, groups_gallery_unique_ALL, submission_dir, device):
+    """
+    Loads the best model to:
+    1. Save validation embeddings for ensemble tuning.
+    2. Report MRR on the internal test set.
+    """
     if not Path(checkpoint_path).exists():
         print(f"Error: Checkpoint not found at {checkpoint_path}. Impossible to continue.")
         exit()
@@ -310,6 +354,7 @@ def run_verification_stitcher(
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
 
+    # Run inference on validation set and save .npz for ensembling
     val_embeddings = run_validation_inference_stitcher(model, val_loader_inf, device)
     
     val_npz_path = Path(submission_dir) / "val_stitcher.npz" 
@@ -330,10 +375,11 @@ def run_verification_stitcher(
     )
     print(f"MRR on Internal Test Set: {test_mrr:.6f}")
 
-def generate_submission_files_stitcher(
-    model, checkpoint_path, test_data_path, 
-    submission_dir, device, batch_size
-):    
+def generate_submission_files_stitcher(model, checkpoint_path, test_data_path, submission_dir, device, batch_size):    
+    """
+    Loads the best model and runs inference on the official test data.
+    Saves both an .npz (for ensembling) and a .csv (for submission).
+    """
     if not Path(checkpoint_path).exists():
         print(f"Error: Checkpoint not found.")
         return
@@ -355,6 +401,7 @@ def generate_submission_files_stitcher(
         BATCH_SIZE_TEST=batch_size
     )
     
+    # Save .npz file for the ensemble
     submission_npz_path = Path(submission_dir) / "submission_stitcher.npz" 
     np.savez(
         submission_npz_path, 
@@ -363,6 +410,7 @@ def generate_submission_files_stitcher(
     )
     print(f"Embeddings for ensemble saved.")
 
+    # Save the final .csv submission file
     submission_path = Path(submission_dir) / "submission_stitcher.csv"
     
     generate_submission(
