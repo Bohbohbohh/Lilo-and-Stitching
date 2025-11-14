@@ -1,9 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 import numpy as np
-import os
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import normalize
@@ -12,13 +10,7 @@ from tqdm import tqdm
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-# Import dalle utility del challenge (necessarie per le funzioni spostate qui)
-# Assicurati che questi percorsi siano corretti nel tuo ambiente Kaggle
 from challenge.src.common.utils import load_data, prepare_train_data, generate_submission
-
-# ----------------------------------------------------------------------------
-# DEFINIZIONI CORE (già presenti)
-# ----------------------------------------------------------------------------
 
 class ResidualBottleneckAdapter(nn.Module):
     def __init__(self, D_in: int, D_out: int, 
@@ -72,7 +64,6 @@ def create_dataset_from_indices(
     z_img_unique, 
     text_to_image_map
 ):
-    """ Funzione helper (non usata nello script main ma presente nel file originale) """
     if len(indices) == 0:
         return None 
 
@@ -85,12 +76,7 @@ def create_dataset_from_indices(
     
     return PairedEmbeddingDataset(z_text_tensor, z_img_tensor)
 
-# ----------------------------------------------------------------------------
-# FUNZIONI DI SETUP E PREPARAZIONE (spostate da 01_rmlpa.py)
-# ----------------------------------------------------------------------------
-
 def setup_environment(seed, device_str="cuda"):
-    """Imposta seed e device."""
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available() and device_str == "cuda":
@@ -101,7 +87,6 @@ def setup_environment(seed, device_str="cuda"):
     return device
 
 def load_and_prepare_data(train_data_path, submission_dir, device):
-    """Carica, prepara i dati di training e crea la galleria globale."""
     print("Loading Training Data (with prepare_train_data)...")
     train_data_dict = load_data(train_data_path)
     z_text_raw, z_img_raw, label_matrix = prepare_train_data(train_data_dict)
@@ -134,7 +119,6 @@ def load_and_prepare_data(train_data_path, submission_dir, device):
     return X_FINAL, Y_FINAL, groups, Y_gallery_unique_ALL, groups_gallery_unique_ALL
 
 def create_train_val_test_splits(X_FINAL, groups, temp_split_ratio, test_split_ratio_of_temp, seed):
-    """Esegue il doppio GroupShuffleSplit per creare set di train, val e test."""
     print("Split 1: Creating Train (90%) and Temp (10%) set...")
     gss_train_temp = GroupShuffleSplit(n_splits=1, test_size=temp_split_ratio, random_state=seed)
     train_indices, temp_indices = next(gss_train_temp.split(X_FINAL.cpu().numpy(), y=None, groups=groups))
@@ -155,7 +139,6 @@ def create_train_val_test_splits(X_FINAL, groups, temp_split_ratio, test_split_r
     return train_indices, val_indices, test_indices, groups_val, groups_test
 
 def create_dataloaders(X_FINAL, Y_FINAL, train_indices, val_indices, test_indices, batch_size, num_workers):
-    """Crea i DataLoader di train, val e test."""
     print("Creating Datasets and DataLoaders...")
     train_dataset = PairedEmbeddingDataset(X_FINAL[train_indices], Y_FINAL[train_indices])
     val_dataset = PairedEmbeddingDataset(X_FINAL[val_indices], Y_FINAL[val_indices])
@@ -181,7 +164,6 @@ def setup_model_and_optimizer(
     init_temperature, learning_rate, weight_decay, 
     num_epochs, train_loader_len, device
 ):
-    """Inizializza modello, temperatura, ottimizzatore e scheduler."""
     print("Initializing model, loss, and optimizer...")
     adapter = ResidualBottleneckAdapter(
         D_in=dim_roberta, 
@@ -201,12 +183,8 @@ def setup_model_and_optimizer(
         T_max=num_epochs * train_loader_len, 
         eta_min=1e-6
     )
-    print("--- Setup complete. Ready for training (Metric Learning). ---")
+    print(" Setup complete. Ready for training.")
     return adapter, temperature, optimizer, scheduler
-
-# ----------------------------------------------------------------------------
-# FUNZIONI DI TRAINING E VALIDAZIONE (spostate da 01_rmlpa.py e utils)
-# ----------------------------------------------------------------------------
 
 def calculate_mrr_validation_sampled(
     X_queries_proj, 
@@ -215,7 +193,6 @@ def calculate_mrr_validation_sampled(
     groups_gallery_unique_ALL,
     n_samples=99 
 ):
-    """Calcola l'MRR (già in utils)."""
     if X_queries_proj.shape[0] == 0:
         return 0.0
 
@@ -262,7 +239,6 @@ def calculate_mrr_validation_sampled(
 
 @torch.no_grad()
 def run_inference(data_loader, adapter, device):
-    """Esegue l'inferenza (già in utils)."""
     adapter.eval()
     all_translated_embeddings = []
     
@@ -279,11 +255,10 @@ def train_loop(
     groups_val, Y_gallery_unique_ALL, groups_gallery_unique_ALL,
     patience, checkpoint_path
 ):
-    """Esegue il ciclo di training completo con InfoNCE e early stopping."""
     best_mrr = -1.0
     epochs_no_improve = 0
 
-    print(f"--- Starting Training (InfoNCE Loss) ---")
+    print(f"    Starting Training (InfoNCE Loss)")
     for epoch in range(num_epochs):
         
         adapter.train()
@@ -341,19 +316,14 @@ def train_loop(
             print(f"--- Early Stopping: MRR has not improved for {patience} epochs. ---")
             break
 
-    print(f"--- Training complete. Best MRR: {best_mrr:.4f} ---")
+    print(f"Training completed. Best MRR: {best_mrr:.4f} ---")
     return best_mrr
-
-# ----------------------------------------------------------------------------
-# FUNZIONI DI VERIFICA E SUBMISSION (spostate da 01_rmlpa.py e utils)
-# ----------------------------------------------------------------------------
 
 def run_verification(
     adapter, checkpoint_path, test_loader, val_loader, device,
     groups_test, groups_val, Y_gallery_unique_ALL, groups_gallery_unique_ALL,
     submission_dir
 ):
-    """Esegue la verifica sul test set interno e salva gli embedding di validazione."""
     print("\n--- Starting Verification on Internal Test Set ---")
 
     if not Path(checkpoint_path).exists():
@@ -373,7 +343,7 @@ def run_verification(
 
     test_mrr = calculate_mrr_validation_sampled(
         X_queries_proj=X_queries_proj_test,
-        groups_val=groups_test, # Usa groups_test
+        groups_val=groups_test, 
         Y_gallery_unique_ALL=Y_gallery_unique_ALL,
         groups_gallery_unique_ALL=groups_gallery_unique_ALL
     )
@@ -394,7 +364,6 @@ def run_verification(
 
 @torch.no_grad()
 def run_submission_inference(z_text_tensor, adapter, device, batch_size=512):
-    """Esegue l'inferenza per la submission (già in utils)."""
     adapter.eval()
     
     all_translated = []
@@ -414,15 +383,13 @@ def generate_submission_files(
     adapter, checkpoint_path, test_data_path, 
     submission_dir, device, batch_size
 ):
-    """Genera i file .npz e .csv finali per la submission."""
     print("\n--- Starting Submission File Generation ---")
     
     if not Path(checkpoint_path).exists():
         print("Error: Checkpoint not found. Cannot generate submission.")
         return
 
-    # Assicurati che il modello sia caricato se non lo è già (es. se PERFORM_TRAINING=False)
-    if not next(adapter.parameters()).is_cuda: # Un semplice check per vedere se il modello è "pronto"
+    if not next(adapter.parameters()).is_cuda: 
         try:
             print(f"Loading model from {checkpoint_path} for submission...")
             checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -466,4 +433,4 @@ def generate_submission_files(
         output_file=str(submission_path)  
     )
 
-    print("--- Submission (RMLPA) created successfully! ---")
+    print("    Submission created successfully!")

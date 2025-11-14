@@ -12,12 +12,7 @@ from sklearn.model_selection import GroupShuffleSplit
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-# Import dalle utility del challenge (necessarie per le funzioni spostate qui)
 from challenge.src.common import generate_submission, load_data, prepare_train_data
-
-# ----------------------------------------------------------------------------
-# DEFINIZIONI CORE (Modello, Dataset, Loss)
-# ----------------------------------------------------------------------------
 
 class LatentMapper(nn.Module):
     def __init__(self, D_in=1536, D_out=1536, R_init=None, bias_init=None, mu_x=None, DEVICE=torch.device("cpu"), dropout_rate=0.25):
@@ -67,14 +62,9 @@ class CustomTripletLoss(nn.Module):
         loss = F.relu(dist_pos - dist_neg + self.margin)
         return loss.mean()
 
-# ----------------------------------------------------------------------------
-# FUNZIONI DI SETUP E PREPARAZIONE (Spostate da 02_mlp.py)
-# ----------------------------------------------------------------------------
-
 def setup_paths_and_device(base_dir_path, checkpoint_dir_name, submission_dir_name, model_file_name):
-    """Imposta device, path e crea directory."""
     DEVICE = torch.device("cpu")
-    print("CPU disponibile ed in uso.") 
+    print("CPU available and used.") 
     
     BASE_DIR = Path(base_dir_path)
     DATA_DIR = BASE_DIR / 'data' 
@@ -90,11 +80,7 @@ def load_and_prepare_data_mlp(
     train_data_path, temp_split_ratio, 
     test_split_ratio_of_temp, seed, device
 ):
-    """
-    Carica i dati, esegue lo split, il padding e l'analisi di Procrustes 
-    per l'inizializzazione del modello MLP.
-    """
-    print("Caricamento Dati di Training...")
+    print("Loading Training data...")
     train_data_dict = load_data(train_data_path)
     X_train_raw, y_train_raw, label_matrix = prepare_train_data(train_data_dict)
 
@@ -102,8 +88,8 @@ def load_and_prepare_data_mlp(
     D_text = X_train_raw.shape[1]
     D_vae = y_train_raw.shape[1]
 
-    print(f"Campioni totali: {N_samples}")
-    print(f"Dimensione Testo: {D_text} | Dimensione VAE: {D_vae}")
+    print(f"Total samples: {N_samples}")
+    print(f"Text dimension: {D_text} | VAE dimension: {D_vae}")
 
     X_FINAL = F.normalize(X_train_raw.to(device), p=2, dim=1)
     Y_FINAL = F.normalize(y_train_raw.to(device), p=2, dim=1)
@@ -111,11 +97,11 @@ def load_and_prepare_data_mlp(
     PADDING_SIZE = D_vae - D_text
     groups = np.argmax(label_matrix, axis=1)
 
-    print("Split 1: Creazione set Train (90%) e Temp (10%)...")
+    print("Split 1: Creation training set (90%) and Temporary set (10%)...")
     gss_train_temp = GroupShuffleSplit(n_splits=1, test_size=temp_split_ratio, random_state=seed)
     train_indices, temp_indices = next(gss_train_temp.split(X_FINAL.cpu().numpy(), y=None, groups=groups))
 
-    print("Split 2: Divisione set Temp in Validation (5%) e Test (5%)...")
+    print("Split 2: Dividing Temporary set in Validation set (5%) and Test set (5%)...")
     groups_temp = groups[temp_indices]
     X_temp_dummy = np.empty((len(groups_temp), 1)) 
     gss_val_test = GroupShuffleSplit(n_splits=1, test_size=test_split_ratio_of_temp, random_state=seed)
@@ -129,9 +115,8 @@ def load_and_prepare_data_mlp(
     groups_val = groups[val_indices]
     groups_test = groups[test_indices] 
 
-    print(f"Split completato: Train ({len(train_idx)}), Val ({len(val_idx)}), Test Interno ({len(test_indices)})")
+    print(f"Split completed: Train ({len(train_idx)}), Val ({len(val_idx)}), Test ({len(test_indices)})")
 
-    # --- Preparazione dati e Padding ---
     X_train_split = X_FINAL[train_idx]
     Y_train_split = Y_FINAL[train_idx]
     X_val_split = X_FINAL[val_idx]
@@ -156,8 +141,6 @@ def load_and_prepare_data_mlp(
     print(f"X Train Padded shape: {X_train_P.shape}")
     print(f"X Validation Padded shape: {X_val_P.shape}")
 
-    # --- Analisi di Procrustes per Inizializzazione ---
-    print(f"\nCalcolo statistiche di inizializzazione sul {len(X_train_P)} campioni di Training...")
     mu_x_train = X_train_P.mean(axis=0)
     mu_y_train = Y_train_P.mean(axis=0)
     X_train_P_centered = X_train_P - mu_x_train
@@ -165,9 +148,8 @@ def load_and_prepare_data_mlp(
 
     R_train, _ = orthogonal_procrustes(X_train_P_centered, Y_train_P_centered)
     bias_train = mu_y_train - (mu_x_train @ R_train)
-    print(f"Statistiche (R, bias, mu_x) calcolate su {len(X_train_P)} campioni.")
+    print(f"R, bias, mu_x calculated on {len(X_train_P)} samples.")
 
-    # --- Conversione a Tensori ---
     X_train_P_tensor = torch.from_numpy(X_train_P).float().to(device)
     Y_train_P_tensor = torch.from_numpy(Y_train_P).float().to(device) 
     X_val_tensor = torch.from_numpy(X_val_P).float().to(device)
@@ -183,7 +165,7 @@ def load_and_prepare_data_mlp(
     data_pack = {
         "train": (X_train_P_tensor, Y_train_P_tensor),
         "val": (X_val_tensor, Y_val_tensor),
-        "test": (X_test_P_tensor, Y_test_split_np), # Y non paddato
+        "test": (X_test_P_tensor, Y_test_split_np),
         "groups_val": groups_val,
         "groups_test": groups_test,
         "init_stats": init_stats,
@@ -193,8 +175,7 @@ def load_and_prepare_data_mlp(
     return data_pack
 
 def load_submission_test_data(test_data_path):
-    """Carica i dati di test per la submission finale."""
-    print("\nCaricamento Dati di Test (per la submission finale)...")
+    print("\nLoading Test data...")
     test_data = load_data(test_data_path)
     X_test_np = test_data['captions/embeddings'] 
     test_data_ids = test_data['captions/ids']
@@ -204,8 +185,7 @@ def setup_model_and_optimizer_mlp(
     D_vae, init_stats, n_epochs, train_loader_len, device,
     lr=1e-5, wd=1e-3, margin=0.2, eta_min=1e-7
 ):
-    """Inizializza modello, loss, ottimizzatore e scheduler."""
-    print("\nInizializzazione Modello DML...")
+    print("\nDML model initialisation...")
     model = LatentMapper(
         D_in=D_vae, 
         D_out=D_vae, 
@@ -224,19 +204,14 @@ def setup_model_and_optimizer_mlp(
     print(f"Loss: Triplet Loss (Margin={margin}) | Optimizer: AdamW (lr={lr})")
     return model, triplet_loss, optimizer, scheduler
 
-# ----------------------------------------------------------------------------
-# FUNZIONI DI TRAINING E VALIDAZIONE (Logica già in utils)
-# ----------------------------------------------------------------------------
-
 def find_hardest_negative_in_batch(A_batch, P_batch):
-    """Trova il negativo più difficile nel batch (Batch-hard)."""
     similarity_matrix = torch.matmul(A_batch, P_batch.T)
 
     hardest_negatives = []
     
     for i in range(A_batch.shape[0]):
         neg_sims = similarity_matrix[i, :].clone()
-        neg_sims[i] = -float('inf') # Maschera il positivo
+        neg_sims[i] = -float('inf') 
         
         hard_neg_idx_local = torch.argmax(neg_sims)
         
@@ -252,7 +227,6 @@ def calculate_mrr_validation_sampled(
     groups_gallery_unique_ALL,
     n_samples=99 
 ):
-    """Calcola l'MRR (già in utils)."""
     if X_queries_proj.shape[0] == 0:
         return 0.0
 
@@ -307,7 +281,6 @@ def calculate_mrr_validation_sampled(
     return mrr_sum / N_queries
 
 def run_training_loop(model, train_loader, optimizer, scheduler, triplet_loss, N_EPOCHS, FINAL_MODEL_PATH, X_val, Y_val, groups_val, PATIENCE, DEVICE):
-    """Esegue il ciclo di training (già in utils)."""
     best_val_mrr = -1.0
     patience_counter = 0
     Y_val_np = Y_val.cpu().numpy()
@@ -348,7 +321,6 @@ def run_training_loop(model, train_loader, optimizer, scheduler, triplet_loss, N
         with torch.no_grad():
             X_val_proj_np = model(X_val).cpu().numpy()
             
-        # Validazione MRR (vs. se stesso, come da logica originale)
         current_val_mrr = calculate_mrr_validation_sampled(
             X_queries_proj=X_val_proj_np, 
             groups_val=groups_val, 
@@ -373,15 +345,9 @@ def run_training_loop(model, train_loader, optimizer, scheduler, triplet_loss, N
             break
         
     print(f"\nFINAL TRAINING COMPLETED.")
-    print(f"Model (best) saved in: {FINAL_MODEL_PATH} with MRR Val: {best_val_mrr:.6f}")
-
-# ----------------------------------------------------------------------------
-# FUNZIONI DI VERIFICA E SUBMISSION (Spostate da 02_mlp.py e utils)
-# ----------------------------------------------------------------------------
+    print(f"Best model saved in: {FINAL_MODEL_PATH} with MRR Val: {best_val_mrr:.6f}")
 
 def save_validation_embeddings(model, X_val_tensor, groups_val, submission_dir):
-    """Salva gli embedding di validazione per il tuning dell'ensemble."""
-    print(f"Generazione embedding di VALIDAZIONE (5%) per tuning alpha...")
     with torch.no_grad():
         val_embeddings = model(X_val_tensor).cpu().numpy()
 
@@ -391,30 +357,23 @@ def save_validation_embeddings(model, X_val_tensor, groups_val, submission_dir):
         embeddings=val_embeddings, 
         groups=groups_val 
     )
-    print(f"Embedding di validazione salvati in {val_npz_path}")
 
 def run_internal_test(model, X_test_P_tensor, Y_test_split_np, groups_test, device):
-    """Esegue il test sul set di test interno (5%)."""
-    print(f"Valutazione performance su TEST SET INTERNO (5%)...")
-    print("Esecuzione inferenza su Test Set Interno...")
+    print(f"Evaluation of performance on TEST SET (5%)...")
     with torch.no_grad():
         test_internal_embeddings = model(X_test_P_tensor).cpu().numpy() 
 
-    # Calcolo MRR (vs. se stesso, come da logica originale)
     test_mrr = calculate_mrr_validation_sampled(
-        X_queries_proj=test_internal_embeddings, # Query
-        groups_val=groups_test,                  # Etichette Query
-        Y_gallery_unique_ALL=Y_test_split_np,    # Galleria
-        groups_gallery_unique_ALL=groups_test    # Etichette Galleria
+        X_queries_proj=test_internal_embeddings, 
+        groups_val=groups_test,                  
+        Y_gallery_unique_ALL=Y_test_split_np,    
+        groups_gallery_unique_ALL=groups_test    
     )
-    print(f"RISULTATO SU TEST INTERNO (5%): MRR @ 1+99 = {test_mrr:.6f}")
-    print("--- Fine Sezione Post-Training ---\n")
+    print(f"RESULT ON TEST (5%): MRR @ 1+99 = {test_mrr:.6f}")
 
 def generate_dml_submission(model, FINAL_MODEL_PATH, X_test_np, test_data_ids, PADDING_SIZE, BASE_DIR, submission_suffix="mlp", DEVICE=torch.device("cpu")):
-    """Genera i file .npz e .csv finali per la submission (già in utils)."""
-    print(f"\nGenerating Submission with Final Template ({submission_suffix})...")
+    print(f"\nGenerating Submission ({submission_suffix})...")
     
-    # Assicurati che il modello sia caricato (anche se è già stato fatto)
     model.load_state_dict(torch.load(FINAL_MODEL_PATH, map_location=DEVICE))
     model.eval()
     
