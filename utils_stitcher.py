@@ -200,27 +200,28 @@ def setup_environment_stitcher(seed, device_str="cuda"):
         torch.cuda.manual_seed(seed)
     else:
         device = torch.device("cpu")
+    print(f"--- Using device: {device} ---")
     return device
 
 def load_and_prepare_data_stitcher(train_data_path, device):
     print("Loading training data...")
     train_data_dict = load_data(train_data_path)
     z_text_raw, z_img_raw, label_matrix = prepare_train_data(train_data_dict)
-    print(f"Total samples: {len(z_text_raw)}")
+    print(f"Training data loaded.")
 
     X_FINAL = F.normalize(z_text_raw.float(), p=2, dim=1).to(device)
     Y_FINAL = F.normalize(z_img_raw.float(), p=2, dim=1).to(device)
-    print("Data normalised and moved on device.")
 
     groups = torch.argmax(label_matrix.float(), axis=1).cpu().numpy()
     return X_FINAL, Y_FINAL, groups
 
 def create_splits_stitcher(X_FINAL, groups, temp_split_ratio, test_split_ratio_of_temp, seed):
-    print("Split 1: Creating Training set (90%) and Temporary set (10%)...")
+    print("\nPreparing data...")
+    print("Split 1: Creating Training set (90%) and Temporary set (10%) set...")
     gss_train_temp = GroupShuffleSplit(n_splits=1, test_size=temp_split_ratio, random_state=seed)
     train_indices, temp_indices = next(gss_train_temp.split(X_FINAL.cpu().numpy(), y=None, groups=groups))
 
-    print("Split 2: Dividing Temporary set in Validation set (5%) and Test set (5%)...")
+    print("Split 2: Splitting Temporary set into Validation set (5%) and Test set (5%)...")
     groups_temp = groups[temp_indices]
     X_temp_dummy = np.empty((len(groups_temp), 1)) 
     gss_val_test = GroupShuffleSplit(n_splits=1, test_size=test_split_ratio_of_temp, random_state=seed)
@@ -231,7 +232,10 @@ def create_splits_stitcher(X_FINAL, groups, temp_split_ratio, test_split_ratio_o
     groups_val = groups[val_indices] 
     groups_test = groups[test_indices]
     
-    print(f"Split completed: Train ({len(train_indices)}), Val ({len(val_indices)}), Test ({len(test_indices)})")
+    print(f"Split completed:")
+    print(f"    Training set: {len(train_indices)}")
+    print(f"    Validation set: {len(val_indices)}")
+    print(f"    Test set: {len(test_indices)}")
     return train_indices, val_indices, test_indices, groups_val, groups_test
 
 def load_global_gallery(submission_dir, gallery_file="gallery_data.npz"):
@@ -243,7 +247,7 @@ def load_global_gallery(submission_dir, gallery_file="gallery_data.npz"):
     gallery_data = np.load(gallery_npz_path)
     Y_gallery_unique_ALL = gallery_data['embeddings']
     groups_gallery_unique_ALL = gallery_data['groups']
-    print(f"Global gallery loaded for testing ({len(Y_gallery_unique_ALL)} samples).")
+    print(f"Global gallery loaded.")
     return Y_gallery_unique_ALL, groups_gallery_unique_ALL
 
 def create_dataloaders_stitcher(
@@ -279,7 +283,7 @@ def create_dataloaders_stitcher(
         num_workers=num_workers, pin_memory=False
     )
     
-    print("DataLoaders (train, val_for_train, val_for_inf) ready.")
+    print("DataLoaders loaded and ready.")
     return train_loader, val_loader_train, val_loader_inf
 
 def setup_model_stitcher(input_dim, output_dim, hidden_dim, dropout_p, device):
@@ -290,7 +294,7 @@ def setup_model_stitcher(input_dim, output_dim, hidden_dim, dropout_p, device):
         hidden_dim=hidden_dim, 
         dropout_p=dropout_p
     ).to(device)
-    print(f"   Stitcher parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"    Stitcher parameters: {sum(p.numel() for p in model.parameters()):,}")
     return model
 
 def run_verification_stitcher(
@@ -298,13 +302,11 @@ def run_verification_stitcher(
     groups_test, groups_val, Y_gallery_unique_ALL, groups_gallery_unique_ALL,
     submission_dir, device
 ):
-    print("\n--- Post-Training Verification ---")
-
     if not Path(checkpoint_path).exists():
         print(f"Error: Checkpoint not found at {checkpoint_path}. Impossible to continue.")
         exit()
         
-    print(f"Loading best model from {checkpoint_path}...")
+    print(f"Loading best model...")
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
 
@@ -317,7 +319,6 @@ def run_verification_stitcher(
         groups=groups_val 
     )
     
-    print(f"Performance evaluation on INTERNAL TEST SET (5%)...")
     with torch.no_grad():
         test_internal_embeddings = model(X_test_tensor).cpu().numpy()
 
@@ -327,14 +328,12 @@ def run_verification_stitcher(
         Y_gallery_unique_ALL=Y_gallery_unique_ALL,
         groups_gallery_unique_ALL=groups_gallery_unique_ALL
     )
-    print(f"--- MRR on Internal Test Set (vs Global Gallery): {test_mrr:.6f} ---")
+    print(f"MRR on Internal Test Set: {test_mrr:.6f}")
 
 def generate_submission_files_stitcher(
     model, checkpoint_path, test_data_path, 
     submission_dir, device, batch_size
-):
-    print("\n--- Start File Submission Generation ---")
-    
+):    
     if not Path(checkpoint_path).exists():
         print(f"Error: Checkpoint not found.")
         return
@@ -342,12 +341,12 @@ def generate_submission_files_stitcher(
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
     
-    print(f"Loading test data from {test_data_path}...")
+    print(f"Loading Test data...")
     test_data_clean = load_data(test_data_path)
 
     z_text_test_raw_np = test_data_clean['captions/embeddings'] 
     sample_ids = test_data_clean['captions/ids']
-    print(f"Test data loaded: {z_text_test_raw_np.shape}")
+    print(f"Test data loaded.")
     
     translated_embeddings = run_submission_inference_stitcher(
         model, 
@@ -362,10 +361,9 @@ def generate_submission_files_stitcher(
         embeddings=translated_embeddings, 
         ids=sample_ids
     )
-    print(f"Submission embeddings for ensemble saved at: {submission_npz_path}")
+    print(f"Embeddings for ensemble saved.")
 
     submission_path = Path(submission_dir) / "submission_stitcher.csv"
-    print(f"Calculate similarity and save submission at {submission_path}...")
     
     generate_submission(
         sample_ids,                     
@@ -373,4 +371,4 @@ def generate_submission_files_stitcher(
         output_file=str(submission_path)  
     )
 
-    print(f"    Submission successfully created!")
+    print(f"Submission successfully created!")
