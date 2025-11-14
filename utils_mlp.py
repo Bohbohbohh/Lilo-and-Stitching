@@ -374,9 +374,7 @@ def run_internal_test(model, X_test_P_tensor, Y_test_split_np, groups_test, devi
     )
     print(f"MRR on Internal Test Set: {test_mrr:.6f}")
 
-def generate_dml_submission(model, FINAL_MODEL_PATH, X_test_np, test_data_ids, PADDING_SIZE, BASE_DIR, submission_suffix="mlp", DEVICE=torch.device("cpu")):
-    print(f"\nGenerating Submission ({submission_suffix})...")
-    
+def generate_dml_submission(model, FINAL_MODEL_PATH, X_test_np, test_data_ids, PADDING_SIZE, BASE_DIR, submission_suffix="mlp", DEVICE=torch.device("cpu")):    
     model.load_state_dict(torch.load(FINAL_MODEL_PATH, map_location=DEVICE))
     model.eval()
     
