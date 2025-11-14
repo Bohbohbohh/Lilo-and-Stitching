@@ -11,8 +11,24 @@ from scipy.linalg import orthogonal_procrustes
 from sklearn.model_selection import GroupShuffleSplit
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+import random
 
 from challenge.src.common import generate_submission, load_data, prepare_train_data
+
+def set_seed(seed_value):
+    random.seed(seed_value)
+    np.random.seed(seed_value)
+    torch.manual_seed(seed_value)
+    
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed_value)
+        torch.cuda.manual_seed_all(seed_value) 
+    
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+    os.environ['PYTHONHASHSEED'] = str(seed_value)
 
 class LatentMapper(nn.Module):
     """
