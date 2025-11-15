@@ -22,6 +22,7 @@ Below is a brief description of the main folders and files and their purpose.
 * `/submission`:
     This crucial folder contains all the outputs required for ensembling and the final submissions.
     * **Final Submissions**: `submission_ensemble_2model.csv` and `submission_ensemble_3model.csv`.
+    
     While running code on Kaggle you should be able to find also:
     * **Single Model Embeddings**: Contains the raw predictions from each model, saved in both `.csv` format (for direct submission) and `.npz` format (optimized for ensembling).
     * **Ensemble Support Files**: Includes intermediate `.npz` files (e.g., `val_mlp.npz`, `val_rmlpa.npz`, `val_stiticher.npz`, `gallery_data.npz`) that contain pre-calculated validation or gallery data, essential for building the final ensembles in the notebook.
