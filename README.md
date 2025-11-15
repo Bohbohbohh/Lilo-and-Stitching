@@ -35,5 +35,5 @@ Below is a brief description of the main folders and files and their purpose.
 * `final-notebook-lilo-and-stitching.ipynb`:
     This is the Jupyter notebook that orchestrates the entire process. It loads the "best models" from the `/checkpoints` folder if the flags to re-run the training are false, runs training in the other case, then it generates predictions for the ensemble (using the logic defined in the `utils` files), and finally performs the "stitching" (ensembling) phase by combining the various `.npz` files to produce the final submissions.
 
-* `Report_Lilo_and_Stitching`:
-    The file (e.g., `.pdf` or `.md`) containing the final project report, which describes in detail the approach, model architectures, tuning process, and the results achieved.
+* `Report_Lilo_and_Stitching.pdf`:
+    The file containing the final project report, which describes in detail the approach, model architectures, tuning process, and the results achieved.
